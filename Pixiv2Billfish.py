@@ -1,5 +1,5 @@
 # -*- encoding: utf-8 -*-
-'''
+"""
 @File    :   pixiv2billfish.py
 @Time    :   2022/07/5 15:07:30
 @Author  :   Ai-Desu
@@ -7,7 +7,7 @@
 @Desc    :   将pixiv插画的tag信息写入到Billfish中\
     使得在Billfish中也能通过标签查找自己喜欢的作品
     参考自 @Coder-Sakura 的 pixiv2eagle
-'''
+"""
 import json
 import re
 import sqlite3
@@ -15,6 +15,7 @@ import os.path
 import time
 import requests
 from loguru import logger
+
 # 强制取消警告
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 
@@ -23,26 +24,29 @@ from thread_pool import ThreadPool, callback
 
 # Billfish 数据库目录
 # eg.:"C:\pictures\.bf\billfish.db"
-DB_PATH = r"billfish.db"
+DB_PATH = r"/mnt/e/Onedrive/图片/Billfish/.bf/billfish.db"
 
 # 选择使用代理链接
-proxies = {'http': 'http://localhost:prot', 'https': 'http://localhost:prot'}
+# proxies = {"http": "http://127.0.0.1:7890", "https": "http://127.0.0.1:7890"}
+
+# 选择标签的分组名称
+TAG_GROUP_NAME = "pixiv_tags"
 
 # 选择是否写入标签/备注
 WRITE_TAG = 1
 WRITE_NOTE = 1
 
-#跳过的文件数，0为从头开始
+# 跳过的文件数，0为从头开始
 START_FILE_NUM = 0
-#处理多少文件，0为直至结束
+# 处理多少文件，0为直至结束
 END_FILE_NUM = 0
 # 选择是否跳过已有内容的数据
 SKIP = 1
 
 # 多线程
 # TAG_TOOL为标签线程，NOTE_TOOL为备注线程
-TAG_TOOL = ThreadPool(8)
-NOTE_TOOL = ThreadPool(8)
+TAG_TOOL = ThreadPool(32)
+NOTE_TOOL = ThreadPool(32)
 FOR_TOOL = ThreadPool(WRITE_TAG + WRITE_NOTE)
 
 temp_url = "https://www.pixiv.net/ajax/illust/"
@@ -52,8 +56,8 @@ headers = {
     "referer": "https://www.pixiv.net/",
     "origin": "https://accounts.pixiv.net",
     "accept-language": "zh-CN,zh;q=0.9",
-    "User-Agent": 'Mozilla/5.0 (Windows NT 10.0; WOW64) '
-                  'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.87 Safari/537.36'
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; WOW64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.87 Safari/537.36",
 }
 
 log_path = os.path.split(os.path.abspath(__file__))[0]
@@ -109,7 +113,7 @@ def baseRequest(options, method="GET", data=None, params=None, retry_num=5):
             headers=headers,
             verify=False,
             timeout=options.get("timeout", 5),
-            proxies=proxies
+            # proxies=proxies,
         )
         response.encoding = "utf8"
         return response
@@ -129,15 +133,13 @@ def get_tags(pid):
     :params pid: pixiv插画id
     :return: [tag1,tag2...] or []
     """
-    resp = baseRequest(
-        options={"url": f"{temp_url}{pid}"}
-    )
+    resp = baseRequest(options={"url": f"{temp_url}{pid}"})
 
     if not resp:
         try:
             if resp.status_code == 404:
-                logger.error("Error:{}".format('该作品已被删除，或作品ID不存在。'))
-                return ['Error:404']
+                logger.error("Error:{}".format("该作品已被删除，或作品ID不存在。"))
+                return ["Error:404"]
         except Exception as e:
             return []
         return []
@@ -169,13 +171,11 @@ def get_note(pid):
     :params pid: pixiv插画id
     :return: "illustTitle userName userId bookmarkCount illustComment" or “”
     """
-    resp = baseRequest(
-        options={"url": f"{temp_url}{pid}"}
-    )
+    resp = baseRequest(options={"url": f"{temp_url}{pid}"})
     if not resp:
         try:
             if resp.status_code == 404:
-                logger.error("Error:{}".format('该作品已被删除，或作品ID不存在。'))
+                logger.error("Error:{}".format("该作品已被删除，或作品ID不存在。"))
                 return "Error:404"
         except Exception as e:
             return ""
@@ -195,8 +195,11 @@ def get_note(pid):
         if json_data["body"]["illustComment"] != "":
             note += "Comment:\r\n" + json_data["body"]["illustComment"]
             # 替换描述中的<br /> 为 \n <a href>替换为[url]href[/url]
-            note = re.sub("<br />+", "\r\n", note).replace("<a href=\"", "[url]").replace(
-                "\" target=\"_blank\">", "[/url]\r\n")
+            note = (
+                re.sub("<br />+", "\r\n", note)
+                .replace('<a href="', "[url]")
+                .replace('" target="_blank">', "[/url]\r\n")
+            )
             # 删除描述中其他HTML标签
             note = re.sub("<(\S*?)[^>]*>.*?|<.*? /> ", "", note)
             # 删除转跳提示链接
@@ -212,23 +215,28 @@ def get_note(pid):
 # 处理为pid
 def get_pid(name):
     """
-   处理获取到的文件名
-   :param name: 文件名
-   :return: pid or ""
-   """
+    处理获取到的文件名
+    :param name: 文件名
+    :return: pid or ""
+    """
     pid = ""
     # 处理非图片扩展名，防止误识别
-    if name.endswith("jpg") or name.endswith("png") or name.endswith("gif") or name.endswith(
-            "webp") or name.endswith("webm") or name.endswith("zip"):
-        if "-" in name:
-            pid = name.split("-")[0]
-        elif "_" in name:
-            pid = name.split("_")[0]
-        else:
-            pid = name.split(".")[0]
-
+    if (
+        name.endswith("jpg")
+        or name.endswith("png")
+        or name.endswith("gif")
+        or name.endswith("webp")
+        or name.endswith("webm")
+        or name.endswith("zip")
+    ):
+        re_str: str = (
+            r"(([A-Za-z0-9]+?)|([0-9]+_))([0-9]+)(_p[0-9]+)?\.(jpg|png|gif|webp)"
+        )
+        res = re.search(re_str, name)
+        if res is None:
+            return ""
         try:
-            int(pid)
+            pid = int(res.group(4))
         except Exception as e:
             logger.warning("Exception:{}".format(e))
             return ""
@@ -239,10 +247,10 @@ def get_pid(name):
 # 检查标签是否存在
 def check_tag_exist(tag_name):
     """
-   检查标签是否存在
-   :params name: 标签名
-   :return: bf_tag.id or False
-   """
+    检查标签是否存在
+    :params name: 标签名
+    :return: bf_tag.id or False
+    """
     try:
         index = tag_name_list.index(tag_name)
         return tag_id_list[index]
@@ -254,10 +262,10 @@ def check_tag_exist(tag_name):
 # 检查文件是否已经有标签
 def check_file_tag_exist(file_id):
     """
-   检查文件是否已经有标签
-   :params file_id: 文件id bf_file.id
-   :return: True or False
-   """
+    检查文件是否已经有标签
+    :params file_id: 文件id bf_file.id
+    :return: True or False
+    """
     try:
         tag_join_file_file_id_list.index(file_id)
         return True
@@ -268,10 +276,10 @@ def check_file_tag_exist(file_id):
 # 检测文件是否已有备注
 def check_note_exist(file_id):
     """
-  检查文件是否已经有备注
-  :params file_id: 文件id bf_file.id
-  :return: True or False
-  """
+    检查文件是否已经有备注
+    :params file_id: 文件id bf_file.id
+    :return: True or False
+    """
     try:
         id = note_file_id_list.index(file_id)
         if note_note_list[id] is not None or note_note_list[id] != "":
@@ -281,7 +289,6 @@ def check_note_exist(file_id):
 
 
 class db_tool:
-
     def __init__(self):
         self.WRITING_DB = 0
         if os.path.isfile(DB_PATH):
@@ -325,9 +332,19 @@ class db_tool:
                 if END_FILE_NUM == 0:
                     count = cursor.execute("select count(*) from bf_file").fetchone()
                     count = count[0]
-                    row = cursor.execute("SELECT id , name FROM bf_file limit " + str(START_FILE_NUM) + "," + str(count)).fetchall()
+                    row = cursor.execute(
+                        "SELECT id , name FROM bf_file limit "
+                        + str(START_FILE_NUM)
+                        + ","
+                        + str(count)
+                    ).fetchall()
                 else:
-                    row = cursor.execute("SELECT id , name FROM bf_file limit " + str(START_FILE_NUM) + "," + str(END_FILE_NUM)).fetchall()
+                    row = cursor.execute(
+                        "SELECT id , name FROM bf_file limit "
+                        + str(START_FILE_NUM)
+                        + ","
+                        + str(END_FILE_NUM)
+                    ).fetchall()
 
             except Exception as e:
                 logger.warning("Exception:{}".format(e))
@@ -371,7 +388,9 @@ class db_tool:
         if conn:
             cursor = conn.cursor()
             try:
-                row = cursor.execute("SELECT file_id,tag_id FROM bf_tag_join_file").fetchall()
+                row = cursor.execute(
+                    "SELECT file_id,tag_id FROM bf_tag_join_file"
+                ).fetchall()
             except Exception as e:
                 logger.warning("Exception:{}".format(e))
                 return self.get_db_tag_join_file()
@@ -392,7 +411,9 @@ class db_tool:
         if conn:
             cursor = conn.cursor()
             try:
-                row = cursor.execute("SELECT file_id,note FROM bf_material_userdata").fetchall()
+                row = cursor.execute(
+                    "SELECT file_id,note FROM bf_material_userdata"
+                ).fetchall()
             except Exception as e:
                 logger.warning("Exception:{}".format(e))
                 return self.get_db_note()
@@ -419,7 +440,13 @@ class db_tool:
             try:
                 self.WRITING_DB = 1
                 for i in prepare_tag:
-                    cursor.execute("INSERT INTO bf_tag (id,name) VALUES ('" + i["id"] + "','" + i["name"] + "')")
+                    cursor.execute(
+                        "INSERT INTO bf_tag (id,name) VALUES ('"
+                        + i["id"]
+                        + "','"
+                        + i["name"]
+                        + "')"
+                    )
                 conn.commit()
                 self.WRITING_DB = 0
                 self.close_db(conn)
@@ -429,6 +456,29 @@ class db_tool:
                 self.WRITING_DB = 0
                 logger.info("Exception:{}".format(e))
                 return self.write_tag_db(prepare_tag)
+        else:
+            time.sleep(0.3)
+            return self.write_tag_db(prepare_tag)
+
+    # 写入标签分组
+    def write_tag_group_db(self, prepare_tag):
+        conn = self.connect_db()
+        if conn and not self.WRITING_DB:
+            gid = conn.execute(f"SELECT id FROM bf_tag_group WHERE name='{TAG_GROUP_NAME}'").fetchone()[0]
+            cursor = conn.cursor()
+            try:
+                self.WRITING_DB = 1
+                for i in prepare_tag:
+                    cursor.execute(f"INSERT INTO bf_tag_join_group (gid,tag_id) VALUES ('{gid}','{i['id']}')")
+                conn.commit()
+                self.WRITING_DB = 0
+                self.close_db(conn)
+                return True
+            except Exception as e:
+                self.close_db(conn)
+                self.WRITING_DB = 0
+                logger.info(f"Expcetion:{e}")
+                return self.write_tag_group_db(prepare_tag)
         else:
             time.sleep(0.3)
             return self.write_tag_db(prepare_tag)
@@ -448,8 +498,12 @@ class db_tool:
                 self.WRITING_DB = 1
                 for i in prepare_tag_join_file:
                     cursor.execute(
-                        "INSERT INTO bf_tag_join_file (file_id,tag_id) VALUES ('" + i["file_id"] + "','" + i[
-                            "tag_id"] + "')")
+                        "INSERT INTO bf_tag_join_file (file_id,tag_id) VALUES ('"
+                        + i["file_id"]
+                        + "','"
+                        + i["tag_id"]
+                        + "')"
+                    )
                 conn.commit()
                 self.WRITING_DB = 0
                 self.close_db(conn)
@@ -477,8 +531,13 @@ class db_tool:
             try:
                 self.WRITING_DB = 1
                 for i in prepare_note_join_file:
-                    conn.cursor().execute("INSERT INTO bf_material_userdata (file_id,note) VALUES ('" + str(
-                        i["file_id"]) + "','" + i["note"] + "')")
+                    conn.cursor().execute(
+                        "INSERT INTO bf_material_userdata (file_id,note) VALUES ('"
+                        + str(i["file_id"])
+                        + "','"
+                        + i["note"]
+                        + "')"
+                    )
                 conn.commit()
                 self.WRITING_DB = 0
                 self.close_db(conn)
@@ -550,10 +609,24 @@ class pixiv2Billfish:
         if self.bf_file is not None:
             try:
                 if WRITE_NOTE:
-                    FOR_TOOL.put(self.thread_task_for, ('note', self.bf_file,), callback)
+                    FOR_TOOL.put(
+                        self.thread_task_for,
+                        (
+                            "note",
+                            self.bf_file,
+                        ),
+                        callback,
+                    )
                     self.task_num += self.task_len
                 if WRITE_TAG:
-                    FOR_TOOL.put(self.thread_task_for, ('tag', self.bf_file,), callback)
+                    FOR_TOOL.put(
+                        self.thread_task_for,
+                        (
+                            "tag",
+                            self.bf_file,
+                        ),
+                        callback,
+                    )
                     self.task_num += self.task_len
                 while True:
                     if self.done_num >= self.task_num:
@@ -569,9 +642,11 @@ class pixiv2Billfish:
 
             while True:
                 logger.info(
-                    f"<free_list> {TAG_TOOL.free_list} <max_num> {TAG_TOOL.max_num} <generate_list> {TAG_TOOL.generate_list}")
+                    f"<free_list> {TAG_TOOL.free_list} <max_num> {TAG_TOOL.max_num} <generate_list> {TAG_TOOL.generate_list}"
+                )
                 logger.info(
-                    f"<free_list> {NOTE_TOOL.free_list} <max_num> {NOTE_TOOL.max_num} <generate_list> {NOTE_TOOL.generate_list}")
+                    f"<free_list> {NOTE_TOOL.free_list} <max_num> {NOTE_TOOL.max_num} <generate_list> {NOTE_TOOL.generate_list}"
+                )
                 # 正常关闭线程池
                 if WRITE_NOTE:
                     if NOTE_TOOL.free_list == [] and NOTE_TOOL.generate_list == []:
@@ -620,13 +695,31 @@ class pixiv2Billfish:
             logger.error("数据库中没有文件")
 
     @logger.catch
-    def thread_task_for(self, flag, bf_file, ):
+    def thread_task_for(
+        self,
+        flag,
+        bf_file,
+    ):
         try:
             for _ in range(0, len(list(bf_file))):
                 if flag == "note":
-                    NOTE_TOOL.put(self.thread_task_note, (bf_file[_], _ + 1,), callback)
+                    NOTE_TOOL.put(
+                        self.thread_task_note,
+                        (
+                            bf_file[_],
+                            _ + 1,
+                        ),
+                        callback,
+                    )
                 elif flag == "tag":
-                    TAG_TOOL.put(self.thread_task_tag, (bf_file[_], _ + 1,), callback)
+                    TAG_TOOL.put(
+                        self.thread_task_tag,
+                        (
+                            bf_file[_],
+                            _ + 1,
+                        ),
+                        callback,
+                    )
                 else:
                     logger.error(f"参数错误!")
                     exit()
@@ -646,7 +739,11 @@ class pixiv2Billfish:
 
     @logger.catch
     # 写入标签线程
-    def thread_task_tag(self, _, num, ):
+    def thread_task_tag(
+        self,
+        _,
+        num,
+    ):
         """
         线程任务函数
         :params _: 文件列表
@@ -697,7 +794,11 @@ class pixiv2Billfish:
 
     # 写入备注线程
     @logger.catch
-    def thread_task_note(self, _, num, ):
+    def thread_task_note(
+        self,
+        _,
+        num,
+    ):
         """
         线程任务函数
         :params _: 文件列表
@@ -755,7 +856,9 @@ class pixiv2Billfish:
         for i in tag_list:
             tag_id = check_tag_exist(i)
             if tag_id:
-                prepare_tag_join_file.append({'file_id': str(file_id), 'tag_id': str(tag_id)})
+                prepare_tag_join_file.append(
+                    {"file_id": str(file_id), "tag_id": str(tag_id)}
+                )
 
             else:
                 if not self.WRITING_TAG:
@@ -765,7 +868,9 @@ class pixiv2Billfish:
                     else:
                         tag_id = 1
                     prepare_tag.append({"id": str(tag_id), "name": str(i)})
-                    prepare_tag_join_file.append({"file_id": str(file_id), "tag_id": str(tag_id)})
+                    prepare_tag_join_file.append(
+                        {"file_id": str(file_id), "tag_id": str(tag_id)}
+                    )
                     tag_id_list.append(tag_id)
                     tag_name_list.append(i)
                     self.WRITING_TAG = 0
@@ -784,7 +889,7 @@ class pixiv2Billfish:
     def write_tag_in_db(self, flag):
         if (len(prepare_tag) >= 20 or flag) and not self.WRITING:
             self.WRITING = 1
-            if self.db_tool.write_tag_db(prepare_tag):
+            if self.db_tool.write_tag_db(prepare_tag) and self.db_tool.write_tag_group_db(prepare_tag):
                 self.WRITING = 0
                 prepare_tag.clear()
                 return True
@@ -812,6 +917,6 @@ class pixiv2Billfish:
             return False
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     test = pixiv2Billfish()
     test.main()
